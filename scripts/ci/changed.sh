@@ -57,7 +57,7 @@ package_area() {
 # NOTE: order matters; first match wins.
 classify_outside() {
   case "$1" in
-    # Non-JS code that ships with the infrastructure (Rust, C, ...). Inside the
+    # Non-JS code that ships with the infrastructure. Inside the
     # infra package directory it is already covered by package_area; this
     # handles it living next to the package.
     infra/*|native/*)        infra=1 ;;
@@ -72,8 +72,6 @@ classify_outside() {
 }
 
 # Edges pnpm cannot see because no package.json links the two sides.
-# (Alternative: declare them, e.g. infra depends on backend and web with
-# "workspace:*", and delete this block.)
 propagate() {
   if [ "$all" -eq 1 ]; then
     infra=1 backend=1 web=1 mobile=1 packages=1
@@ -89,12 +87,15 @@ propagate() {
 
 emit() {
   local b
+  local json="{}"
   for pair in "infra:$infra" "backend:$backend" "web:$web" "mobile:$mobile" \
               "packages:$packages" "docs:$docs"; do
     b=$([ "${pair#*:}" -eq 1 ] && echo true || echo false)
-    echo "${pair%%:*}=$b"
+    # echo "${pair%%:*}=$b"
+    json="$(echo "$json" | jq ".${pair%%:*} = ${b}")"
     if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "${pair%%:*}=$b" >> "$GITHUB_OUTPUT"; fi
   done
+  echo "$json" | jq "."
 }
 
 # --- obtain changed files and the workspace layout ----------------------------
