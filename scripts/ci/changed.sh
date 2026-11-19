@@ -49,7 +49,7 @@ ZERO_SHA="0000000000000000000000000000000000000000"
 # either one means the stack must be re-deployed.
 # (Alternative: declare them, e.g. infra depends on backend and web with
 # "workspace:*", and empty this list.)
-UNDECLARED_EDGES=("backend>infra" "apps/web>infra")
+UNDECLARED_EDGES=()
 
 # --- state ---------------------------------------------------------------------
 all=0            # 1 => every package is marked changed
