@@ -18,28 +18,22 @@ jobs:
       - name: Install project dependencies
         run: pnpm i
       - name: Get changes
+        id: changes
         env:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+        run: ./scripts/ci/changed.sh "$BEFORE" "$AFTER" > /dev/null
+      - name: Deploy changed packages
+        env:
+          CHANGED: ${{ steps.changes.outputs.changed }}
         run: |
-          json="$(./scripts/ci/changed.sh $BEFORE $AFTER)"
+          while read -r pkg; do
+            name="$(jq -r '.name' <<<"$pkg")"
+            path="$(jq -r '.path' <<<"$pkg")"
 
-          # Loop over workspace members
-          while read member; do
-            name="$(echo "$member" | jq -r '.name')"
-            path="$(echo "$member" | jq -r '.path')"
-            changed="$(echo "$member" | jq -r '.changed')"
-
-            if [[ "$changed" = "true" ]]; then
-              echo "Deploying ${name}..."
-              pnpm -C "$path" run deploy 1>/dev/null
-              rc=$?
-
-              if [ "$rc" -ne "0" ]; then
-                echo "Failed to deploy $name"
-                exit 1
-              fi
+            echo "Deploying ${name}..."
+            if ! pnpm -C "$path" run deploy 1>/dev/null; then
+              echo "Failed to deploy $name"
+              exit 1
             fi
-
-          done < <(echo "$json" | jq -c '.[]')
-
+          done < <(jq -c '.[]' <<<"$CHANGED")

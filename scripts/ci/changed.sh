@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Report which pnpm workspace packages need CI/deploy work for a given change.
+# Report which pnpm workspace packages need were changed between two commits.
 #
-# Output: a JSON array with one object per workspace package:
+# Output: a JSON array with one object per CHANGED workspace package:
 #     [{"name":"@ns/web","path":"apps/web","changed":true}, ...]
 # printed (pretty) to stdout. When running inside GitHub Actions it is also
-# appended to $GITHUB_OUTPUT as two single-line values:
-#     projects=<every package>     changed=<only the changed ones>
+# appended to $GITHUB_OUTPUT as a single-line value:
+#     changed=<only the changed ones>
 #
 # Division of labour:
 #   - pnpm lists the workspace packages and says who depends on whom. Nothing
@@ -18,9 +18,13 @@
 #   - "changed" means: a file inside the package changed, or something it
 #     depends on (directly or transitively) changed.
 #
-# What is still described by hand (two small tables below):
+# What is still described by hand (one small table below):
 #   classify_outside   files that live outside every package
-#   UNDECLARED_EDGES   dependencies that no package.json declares
+#
+# Dependencies between packages are never listed here. If a package is built
+# from or deployed with another one, it declares that in its own package.json
+# (e.g. infra depends on backend and web with "workspace:*"), and the change
+# propagates through that edge automatically.
 #
 # Usage:
 #   scripts/ci/changed.sh <base-sha> <head-sha>   # diff-based (PRs, pushes)
@@ -42,14 +46,6 @@
 set -euo pipefail
 
 ZERO_SHA="0000000000000000000000000000000000000000"
-
-# Edges pnpm cannot see because no package.json links the two sides, as
-# "from>to" with repo-relative package dirs: if FROM is changed, TO is too.
-# CDK builds the site image and bundles lambdas as assets, so a change to
-# either one means the stack must be re-deployed.
-# (Alternative: declare them, e.g. infra depends on backend and web with
-# "workspace:*", and empty this list.)
-UNDECLARED_EDGES=()
 
 # --- state ---------------------------------------------------------------------
 all=0            # 1 => every package is marked changed
@@ -156,23 +152,6 @@ expand_dependents() {
   fi
 }
 
-# expand_dependents, then apply UNDECLARED_EDGES until nothing new is added.
-resolve_affected() {
-  local round e from to added
-  for (( round = 0; round <= ${#UNDECLARED_EDGES[@]}; round++ )); do
-    expand_dependents
-    if [ "$all" -eq 1 ]; then return; fi
-    added=0
-    for e in ${UNDECLARED_EDGES[@]+"${UNDECLARED_EDGES[@]}"}; do
-      from="${e%%>*}"; to="${e##*>}"
-      if has_line "$from" "$AFFECTED" && ! has_line "$to" "$AFFECTED"; then
-        claim "$to"; added=1
-      fi
-    done
-    if [ "$all" -eq 1 ] || [ "$added" -eq 0 ]; then return; fi
-  done
-}
-
 emit() {
   local affected_json out changed
   affected_json="$(printf '%s' "$AFFECTED" | jq -Rn '[inputs | select(length > 0)]')"
@@ -180,9 +159,8 @@ emit() {
     'map(.changed = ($all == 1 or (.path as $p | $affected | any(. == $p))))' <<<"$MEMBERS")"
   changed="$(jq -c 'map(select(.changed))' <<<"$out")"
 
-  jq . <<<"$out"
+  jq . <<<"$changed"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    echo "projects=$out" >> "$GITHUB_OUTPUT"
     echo "changed=$changed" >> "$GITHUB_OUTPUT"
   fi
 }
@@ -206,7 +184,7 @@ main() {
 
     # 2. Add everything that depends on the touched packages.
     if [ "$all" -eq 0 ] && [ -n "$TOUCHED" ]; then
-      resolve_affected
+      expand_dependents
     fi
   fi
 
