@@ -1,2 +1,5 @@
-console.warn("Hello");
-console.warn("Making app changes")
+function main() {
+  console.warn("This is the mobile app");
+}
+
+main()
