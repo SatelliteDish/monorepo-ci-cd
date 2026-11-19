@@ -15,7 +15,6 @@ jobs:
           node-version: '25'
       - uses: pnpm/setup@v1
         with:
-          version: 10
           runtime: node@25
           cache: true
       - name: Install runner dependencies
