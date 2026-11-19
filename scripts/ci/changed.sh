@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Report which pnpm workspace packages need were changed between two commits.
+# Report which pnpm workspace packages were changed between two commits.
 #
 # Output: a JSON array with one object per CHANGED workspace package:
 #     [{"name":"@ns/web","path":"apps/web","changed":true}, ...]
@@ -18,17 +18,30 @@
 #   - "changed" means: a file inside the package changed, or something it
 #     depends on (directly or transitively) changed.
 #
-# What is still described by hand (one small table below):
-#   classify_outside   files that live outside every package
+# What is still described by hand:
+#   DEFAULT_EXCLUDES   files that never affect a deployment (docs, markdown, ...)
+#   classify_outside   what to do with files that live outside every package
 #
+# Code that is not JavaScript (Rust, C, ...) should get its own package.json
+# and be listed in pnpm-workspace.yaml so it is a package like any other.
 # Dependencies between packages are never listed here. If a package is built
 # from or deployed with another one, it declares that in its own package.json
 # (e.g. infra depends on backend and web with "workspace:*"), and the change
 # propagates through that edge automatically.
 #
 # Usage:
-#   scripts/ci/changed.sh <base-sha> <head-sha>   # diff-based (PRs, pushes)
+#   scripts/ci/changed.sh <base-sha> <head-sha> [--exclude <glob>]...
 #   scripts/ci/changed.sh --all                   # mark every package changed
+#
+#   --exclude <glob>  Ignore changed files matching <glob>. Repeatable. Using it
+#                     at least once REPLACES the built-in defaults entirely (it
+#                     does not add to them); --exclude '' ignores nothing.
+#                     A pattern without "/" matches the file name at any depth,
+#                     like .gitignore ("*.md", "LICENSE"). A pattern with "/" is
+#                     matched against the repo-relative path from the root, and
+#                     "*" also matches "/" ("docs/*" = everything under docs/).
+#                     Excluded files are dropped before anything else, so this
+#                     applies inside packages as well as outside them.
 #
 # Requirements: git, jq, pnpm (no `pnpm install` needed), full git history
 # (fetch-depth: 0). The dependency graph is read from the checked-out tree, so
@@ -37,7 +50,7 @@
 # Design rules:
 #   1. Unknown or unsure => mark everything changed. A wasted CI run is cheap;
 #      a missed one is not.
-#   2. Every changed file must be inside a package or claimed by
+#   2. Every changed file must be excluded, inside a package, or handled by
 #      classify_outside. Anything else marks everything changed, which makes
 #      forgotten directories loud.
 #   3. If the package list itself cannot be produced there is nothing to
@@ -47,14 +60,20 @@ set -euo pipefail
 
 ZERO_SHA="0000000000000000000000000000000000000000"
 
+# Changes to these never modify a deployment. Replaced by any --exclude.
+DEFAULT_EXCLUDES=("docs/*" "LICENSE" ".gitignore" "*.md")
+
 # --- state ---------------------------------------------------------------------
 all=0            # 1 => every package is marked changed
 TOP=""           # repo root (physical path)
+SELF_DIR=""      # directory holding this script, relative to the repo root
 MEMBERS="[]"     # JSON: [{name, path}] for every workspace package
 PKG_DIRS=""      # the same paths, one per line
 FILES=""         # every file changed since the merge-base
 TOUCHED=""       # package dirs with a directly changed file, one per line
 AFFECTED=""      # TOUCHED plus everything that depends on them, one per line
+EXCLUDES=("${DEFAULT_EXCLUDES[@]}")  # active exclude globs
+custom_excludes=0                    # 1 => --exclude was given, defaults dropped
 
 log() { echo "changed.sh: $*" >&2; }
 die() { log "$*"; exit 1; }
@@ -62,29 +81,33 @@ die() { log "$*"; exit 1; }
 # has_line <needle> <newline-separated haystack>
 has_line() { grep -qxF -- "$1" <<<"$2"; }
 
-# Mark a workspace package as directly changed.
-claim() {
-  if has_line "$1" "$PKG_DIRS"; then
-    TOUCHED+="$1"$'\n'
-  else
-    all=1
-    log "'$1' is claimed by a rule but is not a workspace package"
-  fi
+# add_exclude <glob>: the first call discards the defaults.
+add_exclude() {
+  if [ "$custom_excludes" -eq 0 ]; then EXCLUDES=(); custom_excludes=1; fi
+  EXCLUDES+=("$1")
 }
 
-# Classify a changed file that is NOT inside any workspace package.
-# NOTE: order matters; first match wins.
+# is_excluded <repo-relative file>: does any active exclude glob match it?
+is_excluded() {
+  local f="$1" p
+  for p in "${EXCLUDES[@]}"; do
+    if [ -z "$p" ]; then continue; fi
+    case "$p" in
+      */*) case "$f" in $p) return 0 ;; esac ;;
+      *)   case "${f##*/}" in $p) return 0 ;; esac ;;
+    esac
+  done
+  return 1
+}
+
+# Classify a changed file that is NOT inside any workspace package and was not
+# excluded. NOTE: order matters; first match wins.
 classify_outside() {
   case "$1" in
-    # Non-JS code that ships with a package (Rust, C, ...). Giving native/ its
-    # own package.json makes it a package and removes the need for this rule.
-    native/*)                claim infra ;;
-    # Nothing is deployed from these.
-    docs/*)                  ;;
-    README.md|CONTRIBUTING.md|LICENSE|.gitignore) ;;
-    # Global inputs: a change here can affect everything.
+    # Global inputs: a change here can affect everything. This includes the CI
+    # tooling itself (the directory this script lives in).
     pnpm-lock.yaml|pnpm-workspace.yaml|package.json|tsconfig*.json|.nvmrc|.npmrc) all=1 ;;
-    .github/*|scripts/ci/*)  all=1 ;;
+    .github/*|"$SELF_DIR"/*) all=1 ;;
     # Rule 1 + 2: anything unclaimed marks everything changed.
     *)                       all=1; log "unclaimed path '$1'" ;;
   esac
@@ -101,6 +124,10 @@ read_changes() {
 
   TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
   TOP="$(cd "$TOP" && pwd -P)"
+  # Resolve this script's directory before cd: $0 may be relative to the
+  # caller's directory. Stays absolute (and so never matches) outside the repo.
+  SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  SELF_DIR="${SELF_DIR#"$TOP"/}"
   cd "$TOP"
 
   # The package list is needed for the output, so failing here is fatal.
@@ -167,12 +194,25 @@ emit() {
 
 main() {
   local f d inpkg
-  read_changes "$@"
+  local -a pos=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --exclude)   if [ $# -lt 2 ]; then die "--exclude needs a pattern"; fi
+                   add_exclude "$2"; shift 2 ;;
+      --exclude=*) add_exclude "${1#--exclude=}"; shift ;;
+      --all)       pos+=("$1"); shift ;;
+      -*)          die "unknown option '$1'" ;;
+      *)           pos+=("$1"); shift ;;
+    esac
+  done
+  read_changes "${pos[@]+"${pos[@]}"}"
 
   if [ "$all" -eq 0 ]; then
-    # 1. Sort every changed file into "inside package X" or "outside".
+    # 1. Sort every changed file into "excluded", "inside package X" or "outside".
     while IFS= read -r f; do
       if [ -z "$f" ]; then continue; fi
+      if is_excluded "$f"; then continue; fi
       inpkg=0
       while IFS= read -r d; do
         if [ -n "$d" ]; then
