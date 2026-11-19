@@ -13,11 +13,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '25'
-
-      - name: Install runner dependencies
-        run: |
-          npx get-pnpm
-          source /home/runner/.bashrc
+      - uses: pnpm/setup@v1
+        with:
+          cache: true
       - name: Install project dependencies
         run: pnpm i
       - name: Get changes
