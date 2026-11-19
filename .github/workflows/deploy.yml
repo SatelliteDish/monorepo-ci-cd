@@ -13,8 +13,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '25'
+      - uses: pnpm/setup@v1
+        with:
+          version: 10
+          runtime: node@25
+          cache: true
       - name: Install runner dependencies
-        run: sudo apt-get install jq pnpm
+        run: sudo apt-get install jq
       - name: Install project dependencies
         run: pnpm i
       - name: Get changes
