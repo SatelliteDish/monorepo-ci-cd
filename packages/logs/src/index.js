@@ -1,3 +1,5 @@
-console.log("Hello world")
-console.log("Hello world")
-console.log("Hello world")
+function main() {
+  console.log("This is the logs");
+}
+
+main()
