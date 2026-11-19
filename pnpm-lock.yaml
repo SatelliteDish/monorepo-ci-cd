@@ -1,0 +1,35 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  apps/mobile:
+    dependencies:
+      '@ws/logs':
+        specifier: workspace:*
+        version: link:../../packages/logs
+
+  apps/web:
+    dependencies:
+      '@ws/schema':
+        specifier: workspace:*
+        version: link:../../packages/schema
+
+  backend/sign-in: {}
+
+  backend/sign-up: {}
+
+  infra:
+    dependencies:
+      '@ws/logs':
+        specifier: workspace:*
+        version: link:../packages/logs
+
+  packages/logs: {}
+
+  packages/schema: {}
