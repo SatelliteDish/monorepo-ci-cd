@@ -16,8 +16,8 @@ jobs:
 
       - name: Install runner dependencies
         run: |
-          sudo apt-get install jq
           npx get-pnpm
+          source /home/runner/.bashrc
       - name: Install project dependencies
         run: pnpm i
       - name: Get changes
