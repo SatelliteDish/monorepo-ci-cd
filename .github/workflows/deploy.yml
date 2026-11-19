@@ -1,0 +1,22 @@
+name: deploy
+run-name: Deploying monorepo
+on:
+  push:
+    branches:
+      - 'main'
+      - 'dev'
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '25'
+      - name: Install jq
+        run: sudo apt-get install jq
+      - name: Get changes
+        run: |
+            JSON="$(./scripts/ci/changed.sh)"
+            echo "$JSON"
+
